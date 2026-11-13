@@ -1,0 +1,1085 @@
+// The domain model. Notes where it deliberately differs from the original brief
+// are in docs/decisions.md (tenantId added to message tables; composite webhook
+// uniqueness; enums instead of loose strings).
+
+generator client {
+  provider        = "prisma-client-js"
+  // `postgresqlExtensions` is what lets the pgvector phase declare the vector
+  // column the database computes. This Prisma version has no `@generated`
+  // attribute, which is why `textTsv` below carries no default: the indexer writes
+  // it, so nothing in the datamodel has to describe a database-generated column.
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  url        = env("DATABASE_URL")
+  directUrl  = env("DATABASE_DIRECT_URL")
+  // pgvector, for the chunk side table below. The extension is created by the
+  // `embeddings` migration, so a fresh database is one `migrate deploy` away.
+  extensions = [vector]
+}
+
+enum Role {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+/**
+ * DRAFT is a state, not a soft delete: a draft answers the playground and the
+ * test runs — that is what it is for — but no public surface may be pointed at
+ * it (`requireActive` in `runAgentTurn`). The column default stays ACTIVE so
+ * every agent that existed before DRAFT keeps behaving exactly as it did; a
+ * new agent is made a draft by the create path, where the rule belongs.
+ */
+enum AgentStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  ERROR
+}
+
+enum IntegrationType {
+  TELEGRAM_IN
+  WHATSAPP_IN
+  SHEETS_OUT
+  DRIVE_OUT
+  WEBHOOK_OUT
+}
+
+enum IntegrationStatus {
+  CONNECTED
+  ERROR
+  REVOKED
+}
+
+enum Direction {
+  INPUT
+  OUTPUT
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+}
+
+enum UsageKind {
+  MODEL_CALL
+  CONNECTOR_WRITE
+  QUOTA_RESET
+  // One automatic sentiment call per public question. Its own kind so the cost of
+  // listening is visible on the ledger instead of hiding inside MODEL_CALL rows.
+  CLASSIFY
+}
+
+enum WebhookStatus {
+  QUEUED
+  PROCESSED
+  FAILED
+  DEAD
+}
+
+enum WorkflowStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+}
+
+enum WorkflowNodeKind {
+  INBOUND
+  AGENT
+  OUTBOUND
+  // One agent that delegates to declared subagents through a `subagent` tool.
+  ORCHESTRATOR
+}
+
+enum WorkflowDependencyKind {
+  AGENT
+  INTEGRATION
+}
+
+// BLOCKED means the run refused before any provider call (zero balance, paused
+// agent, unusable graph). It is deliberately not FAILED so a tenant out of
+// quota reads as "blocked, nothing was spent" and cannot cause a retry storm.
+enum RunStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+  BLOCKED
+}
+
+enum AgentRunStepKind {
+  MODEL
+  TOOL
+}
+
+/**
+ * What an agent can be *given*. One table, one kind column: a skill, a tool and
+ * a knowledge source are all capabilities a grant turns on, which is what lets
+ * the console show one list and the assembler make one decision.
+ */
+enum CapabilityKind {
+  SKILL
+  TOOL
+  KNOWLEDGE
+  SITE
+}
+
+/**
+ * A crawl is a worker's job, so the row's status is the console's only truth.
+ * `PENDING` and `CRAWLING` are separately observable on purpose: "queued" and
+ * "a worker is fetching pages right now" are different answers to "why is my
+ * site not there yet", and a FAILED crawl keeps the reason.
+ */
+enum SiteStatus {
+  PENDING
+  CRAWLING
+  READY
+  FAILED
+}
+
+/**
+ * DRAFT is never offered to an agent; ARCHIVED keeps its history and its grants
+ * but stops appearing in the catalogue, so a run recorded yesterday still names
+ * the skill it had.
+ */
+enum SkillStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum NodeRunStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  SKIPPED
+}
+
+/**
+ * How a document arrived. `PAGE` is written by the crawler and nothing else, so
+ * an upload can never be mistaken for a crawled page — which matters because only
+ * a `PAGE` carries the URL a *Go to page* button is allowed to point at.
+ */
+enum KnowledgeKind {
+  FILE
+  PAGE
+  NOTE
+}
+
+/**
+ * Indexing is a worker's job, so the row's status is the only truth the console
+ * has about it. `FAILED` keeps `error`: a document that silently never became
+ * searchable is the bug this whole table exists to avoid.
+ */
+enum KnowledgeStatus {
+  PENDING
+  INDEXING
+  INDEXED
+  FAILED
+}
+
+/**
+ * A widget is either answering visitors or parked. Pausing is not deleting: the
+ * thread history and the rate rows stay, and the embed key stops being accepted,
+ * which is the operation an operator actually wants at 2 a.m.
+ */
+enum EmbedStatus {
+  ACTIVE
+  PAUSED
+}
+
+/**
+ * The visitor-facing half of a queued turn. `PENDING` and `RUNNING` are states the
+ * widget polls through, and only `ANSWERED` carries a reply: a half-finished run
+ * must never look like an answer.
+ */
+enum EmbedMessageStatus {
+  PENDING
+  RUNNING
+  ANSWERED
+  FAILED
+}
+
+model Tenant {
+  id           String   @id @default(cuid())
+  name         String
+  plan         Plan     @relation(fields: [planId], references: [id])
+  planId       String
+  tokenBalance BigInt   @default(0)
+  cycleResetAt DateTime
+  createdAt    DateTime @default(now())
+
+  users                User[]
+  agents               Agent[]
+  integrations         Integration[]
+  usageEvents          UsageEvent[]
+  conversations        Conversation[]
+  conversationMessages ConversationMessage[]
+  projects             Project[]
+  workflows            Workflow[]
+  workflowDependencies WorkflowDependency[]
+  workflowRuns         WorkflowRun[]
+  workflowNodeRuns     WorkflowNodeRun[]
+  agentRuns            AgentRun[]
+  skills               Skill[]
+  agentCapabilities    AgentCapability[]
+  knowledgeDocs        KnowledgeDoc[]
+  sites                Site[]
+  embeds               Embed[]
+  embedMessages        EmbedMessage[]
+  embedFeedback        EmbedFeedback[]
+  sheets               Sheet[]
+
+  @@index([cycleResetAt])
+}
+
+model Plan {
+  id              String  @id @default(cuid())
+  name            String  @unique
+  monthlyPriceUsd Decimal @default(0) @db.Decimal(10, 2)
+  tokenQuota      BigInt
+  maxIntegrations Int
+  features        Json    @default("{}")
+
+  tenants Tenant[]
+}
+
+model User {
+  id                 String   @id @default(cuid())
+  tenantId           String
+  tenant             Tenant   @relation(fields: [tenantId], references: [id])
+  email              String   @unique
+  role               Role     @default(OWNER)
+  passwordHash       String?
+  googleRefreshToken String? // Keyring v1 blob, never plaintext
+  createdAt          DateTime @default(now())
+
+  @@index([tenantId])
+}
+
+model Agent {
+  id                 String      @id @default(cuid())
+  tenantId           String
+  tenant             Tenant      @relation(fields: [tenantId], references: [id])
+  // An agent belongs to exactly one project, and the workflow canvas only ever
+  // offers agents from the project it was opened from. RESTRICT, not Cascade:
+  // deleting a project must not silently destroy agents, their conversations
+  // and their message history.
+  projectId          String
+  project            Project     @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  name               String
+  status             AgentStatus @default(ACTIVE)
+  systemPrompt       String
+  modelProvider      String // must resolve in the provider registry
+  modelName          String
+  temperature        Float       @default(0.7)
+  maxOutputTokens    Int         @default(1024)
+  // Cost ceilings, because a tool loop multiplies one message into many calls.
+  // `0` means "not capped here" rather than "no budget": the tenant balance is
+  // still the last word, and the console labels a zero ceiling "plan limit".
+  maxToolSteps       Int         @default(6)
+  perTurnTokenBudget Int         @default(0)
+  dailyTokenBudget   Int         @default(0)
+  createdAt          DateTime    @default(now())
+
+  integrations  AgentIntegration[]
+  conversations Conversation[]
+  capabilities  AgentCapability[]
+  embeds        Embed[]
+  sheets        Sheet[]
+  // One website per agent: the pages it may route visitors to. A second site
+  // would make "which page is the login page" ambiguous, which is the question
+  // this table exists to answer.
+  site          Site?
+
+  // Replaces @@index([tenantId, status]): the tenant-only pair was a strict
+  // prefix of this one, so keeping both would be pure write overhead.
+  @@index([tenantId, projectId, status])
+}
+
+model Integration {
+  id                   String            @id @default(cuid())
+  tenantId             String
+  tenant               Tenant            @relation(fields: [tenantId], references: [id])
+  // Channel connections are project-owned "deps" — the same reasoning as
+  // Agent.projectId. Plan limits stay tenant-wide regardless (see writes.ts).
+  projectId            String
+  project              Project           @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  type                 IntegrationType
+  credentialsEncrypted String // Keyring v1 blob — the only credential column
+  externalId           String? // telegram bot id / spreadsheet id
+  status               IntegrationStatus @default(CONNECTED)
+  createdAt            DateTime          @default(now())
+
+  agents AgentIntegration[]
+
+  @@index([tenantId, projectId, type])
+}
+
+model AgentIntegration {
+  id            String      @id @default(cuid())
+  agentId       String
+  agent         Agent       @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  integrationId String
+  integration   Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+  direction     Direction
+
+  @@unique([agentId, integrationId])
+}
+
+/**
+ * A skill: instructions the agent may ask to read, plus the capabilities it
+ * needs to be worth reading. `key` is what the model calls `use_skill` with and
+ * what a builtin grant's `ref` holds, so it is stable text, never a cuid.
+ * The row carries the *draft* the operator is editing; `SkillVersion` carries
+ * the frozen text a run actually saw. `latestVersion > 0` with an
+ * `activeVersionId` that is null means "published once, now unpublished" — the
+ * catalogue drops it, history keeps naming it.
+ */
+model Skill {
+  id              String      @id @default(cuid())
+  tenantId        String
+  tenant          Tenant      @relation(fields: [tenantId], references: [id])
+  key             String
+  name            String
+  description     String
+  // The draft the operator edits. It is never what an agent reads: that is the
+  // `SkillVersion` `activeVersionId` points at, which is why publishing is an
+  // action rather than a save.
+  instructions    String      @default("")
+  // What must be true for this skill to be usable: ["embeddings"], ["knowledge"],
+  // ["site"]. Unmet requirements resolve to a degradation, never a silent yes.
+  requires        Json        @default("[]")
+  // Tool keys this skill asks for by name, resolved against the code registry.
+  tools           Json        @default("[]")
+  // A core skill must be available for a public surface to activate at all:
+  // the widget cannot go live claiming a capability the agent does not have.
+  core            Boolean     @default(false)
+  status          SkillStatus @default(DRAFT)
+  // FK-less on purpose. `SkillVersion` cascades from here, so the pointer can
+  // not dangle within a live skill, and a real FK would close a cycle between
+  // the two tables for no added guarantee.
+  activeVersionId String?
+  latestVersion   Int         @default(0)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  versions SkillVersion[]
+
+  // Tenant-wide, not per-project: a skill is library content an agent is grant-
+  // ed, and the grant table already carries the project through the agent.
+  @@unique([tenantId, key])
+  @@index([tenantId, status])
+}
+
+/**
+ * One publish, forever. A run that used version 3 reads back version 3 even
+ * after the operator rewrote the skill, which is the whole reason versioning
+ * earns its rows.
+ * No `tenantId`: reached only through `Skill`, exactly like `AgentRunStep`.
+ */
+model SkillVersion {
+  id            String   @id @default(cuid())
+  skillId       String
+  skill         Skill    @relation(fields: [skillId], references: [id], onDelete: Cascade)
+  versionNumber Int
+  instructions  String
+  requires      Json     @default("[]")
+  tools         Json     @default("[]")
+  // sha256 of `instructions`: republishing unchanged text is visible as a
+  // no-op instead of looking like a new edit.
+  hash          String
+  publishedAt   DateTime @default(now())
+
+  @@unique([skillId, versionNumber])
+}
+
+/**
+ * One thing an agent is allowed to have. Skills, registry tools and knowledge
+ * sources are all grants in this table, which is what lets the console render
+ * one list and the assembler make one decision per row.
+ * `ref` is free text by design: a builtin key (`use_skill`), a `Skill.id`, or a
+ * `KnowledgeSource.id` — and a ref that no longer resolves degrades visibly
+ * rather than deleting the operator's intent. `enabled` is the toggle the card
+ * shows; a disabled grant is absent from the assembly but keeps its row so the
+ * list survives being turned back on.
+ * Cascade on agent delete: a grant for an agent that is gone can never be read
+ * again, and what a run *did* have is preserved in `AgentRun.capability`.
+ */
+model AgentCapability {
+  id        String         @id @default(cuid())
+  tenantId  String
+  tenant    Tenant         @relation(fields: [tenantId], references: [id])
+  agentId   String
+  agent     Agent          @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  kind      CapabilityKind
+  ref       String
+  config    Json           @default("{}")
+  enabled   Boolean        @default(true)
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  @@unique([agentId, kind, ref])
+  @@index([tenantId, kind, ref])
+}
+
+/**
+ * One thing the agent can be told: a file's text, a crawled page, or a note the
+ * operator typed. `content` is stored decoded and normalized rather than being
+ * thrown away after chunking, so re-indexing (and re-embedding in the next phase)
+ * never asks the operator for the file again — and so a chunk can always be read
+ * back in the document it came from.
+ * It belongs to a project, not to an agent. Which agent may search it is the
+ * `AgentCapability` grant, so the same terms page can serve two agents without
+ * storing it twice, and revoking access is one row rather than a deletion.
+ */
+model KnowledgeDoc {
+  id         String          @id @default(cuid())
+  tenantId   String
+  tenant     Tenant          @relation(fields: [tenantId], references: [id])
+  projectId  String?
+  project    Project?        @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  /// The source that produced this document — a crawl in the phase that has one. Null for an upload.
+  sourceId   String?
+  kind       KnowledgeKind
+  title      String
+  /// The MIME the decoder actually produced text for, not what the browser claimed.
+  mime       String
+  content    String
+  charCount  Int             @default(0)
+  /// Bytes of the *uploaded* body, before decoding: what the size limit is measured against.
+  byteSize   Int             @default(0)
+  /// sha256 of `content`. Re-uploading the same text is visible as the same hash rather than paid for twice.
+  sha256     String
+  status     KnowledgeStatus @default(PENDING)
+  error      String?
+  meta       Json            @default("{}")
+  /// Written by the indexer from the rows it inserted, so a stale count is a bug rather than a guess.
+  chunkCount Int             @default(0)
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
+
+  chunks KnowledgeChunk[]
+
+  @@index([tenantId, status])
+  @@index([tenantId, projectId, sha256])
+}
+
+/**
+ * A searchable piece of a document. `seq` is contiguous from 0 and unique inside
+ * the document, which is what makes a re-index replace rather than accumulate: the
+ * indexer deletes the document's chunks and writes them again in one pass.
+ * `textTsv` is the Postgres full-text column the search matches against. It is a
+ * plain column rather than a `GENERATED` one for two reasons this codebase can
+ * feel: Prisma's client cannot author a generated column, and a `GENERATED ALWAYS`
+ * column is one `migrate diff` will want to drop because the datamodel has no way
+ * to say what it is. So the indexer writes `to_tsvector('english', text)` itself —
+ * one place, `packages/core/src/knowledge/indexer.ts`, which is also what the GIN
+ * index created by hand in the migration exists to serve.
+ */
+model KnowledgeChunk {
+  id         String                    @id @default(cuid())
+  docId      String
+  doc        KnowledgeDoc              @relation(fields: [docId], references: [id], onDelete: Cascade)
+  // Carried on the child as well as reachable through the document, because the
+  // search query is one statement over chunks and cannot join up to the tenant
+  // clause without it. The scoped wrapper forces the same column on every read.
+  tenantId   String
+  seq        Int
+  text       String
+  charCount  Int                       @default(0)
+  textTsv    Unsupported("tsvector")?
+  embeddings KnowledgeChunkEmbedding[]
+
+  @@unique([docId, seq])
+  @@index([tenantId])
+  // GIN, not the B-tree Prisma would build by default: a tsvector is only
+  // searchable with `@@`, and `@@` only uses a GIN index. Declared here rather than
+  // left to the migration because an index the datamodel does not know about is an
+  // index the next `migrate dev` proposes to drop — and `map` pins the name the
+  // migration that created it actually used.
+  @@index([textTsv], type: Gin, map: "KnowledgeChunk_textTsv_gin")
+}
+
+/**
+ * One chunk's vector, on a side table rather than a column of `KnowledgeChunk`.
+ * A vector column on the chunk table would have to name a dimension in the
+ * datamodel, which pins the build to one embedding model and makes every model
+ * change a schema change. Here `dim` is a value and `model` names the vector
+ * space the row belongs to, so re-embedding under a new model adds a row instead
+ * of silently mixing two spaces in one comparison. The primary key is
+ * `(chunkId, model)` for the same reason: the old vectors stay readable while the
+ * new ones are written.
+ * No HNSW index yet: an index is a build-time cost and a tuning decision, and this
+ * phase has no measurements for it. The scan filters by model and dimension and
+ * compares exactly.
+ */
+model KnowledgeChunkEmbedding {
+  chunkId   String
+  chunk     KnowledgeChunk        @relation(fields: [chunkId], references: [id], onDelete: Cascade)
+  model     String
+  dim       Int
+  embedding Unsupported("vector")
+  createdAt DateTime              @default(now())
+
+  @@id([chunkId, model])
+  @@index([model, dim])
+}
+
+model Conversation {
+  id             String   @id @default(cuid())
+  tenantId       String
+  tenant         Tenant   @relation(fields: [tenantId], references: [id])
+  agentId        String
+  agent          Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  externalChatId String // telegram chat id / whatsapp number
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  messages ConversationMessage[]
+
+  // One thread per external chat per agent — the worker upserts on this key.
+  @@unique([agentId, externalChatId])
+  @@index([tenantId])
+}
+
+model ConversationMessage {
+  id             String       @id @default(cuid())
+  tenantId       String
+  tenant         Tenant       @relation(fields: [tenantId], references: [id])
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           MessageRole
+  content        String
+  inputTokens    Int          @default(0)
+  outputTokens   Int          @default(0)
+  createdAt      DateTime     @default(now())
+
+  // The history window is always "last N for this conversation".
+  @@index([conversationId, createdAt])
+  @@index([tenantId])
+}
+
+model UsageEvent {
+  id              String    @id @default(cuid())
+  tenantId        String
+  tenant          Tenant    @relation(fields: [tenantId], references: [id])
+  agentId         String?
+  kind            UsageKind
+  tokensUsed      Int
+  costUsdEstimate Decimal   @default(0) @db.Decimal(10, 6)
+  metadata        Json      @default("{}")
+  createdAt       DateTime  @default(now())
+
+  // Every usage page and the reconciliation job queries exactly this.
+  @@index([tenantId, createdAt])
+}
+
+model WebhookEventLog {
+  id                String        @id @default(cuid())
+  // Nullable because an inbound request can be logged before its channel is
+  // resolved to a tenant. The console only reads its own rows, so an
+  // unresolved event stays invisible to every tenant.
+  tenantId          String?
+  source            String // "telegram" | "whatsapp" | "console"
+  externalMessageId String // the idempotency key
+  status            WebhookStatus @default(QUEUED)
+  receivedAt        DateTime      @default(now())
+  processedAt       DateTime?
+
+  // --- queue state (docs/decisions.md D7) -----------------------------------
+  // This row is now two things: the append-only idempotency guard it always
+  // was, and the lease the worker holds while a graph runs. That holds
+  // together only because the KEY (source, externalMessageId) is never
+  // re-keyed or deleted — everything below is mutable state inside an
+  // immutable identity. pg-queue.ts is the only file allowed to touch these
+  // columns; if the dual role ever rots, a dedicated QueueJob table is a
+  // one-file swap behind the Queue interface.
+  // "graph.run" is a job waiting for a worker; "inbox" is a row that only ever
+  // feeds the console's event list. The default is the inert lane on purpose:
+  // every writer today produces an inbox row, and a QUEUED row that silently
+  // inherits "graph.run" would be claimed and executed as a workflow.
+  lane        String    @default("inbox")
+  payload     Json? // the job body: without this the worker cannot know what to send
+  attempts    Int       @default(0)
+  maxAttempts Int       @default(3)
+  lastError   String?
+  lockedAt    DateTime?
+  lockedBy    String?
+  lockedUntil DateTime? // in-flight is "lockedUntil > now()", not a new status value
+  runId       String? // FK-less: run history may be deleted independently
+  workflowId  String? // FK-less: the graph may be deleted while history remains
+
+  // Uniqueness is scoped per source: telegram and whatsapp message ids
+  // live in different namespaces and must not collide with each other.
+  @@unique([source, externalMessageId])
+  @@index([status, receivedAt])
+  @@index([tenantId, receivedAt])
+  // The claim index. Deliberately not partial (WHERE lane = 'graph.run'):
+  // Prisma cannot express one, and hand-written SQL would fail the
+  // `migrate diff --exit-empty` gate that keeps schema.prisma authoritative.
+  @@index([lane, status, lockedUntil, receivedAt])
+}
+
+model Project {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+  name        String
+  description String?
+  // Set only by the add_project backfill and the seed, so the UI can label the
+  // row "Default". Not database-enforced as unique-per-tenant.
+  isDefault   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  agents       Agent[]
+  integrations Integration[]
+  workflows    Workflow[]
+  knowledge    KnowledgeDoc[]
+  sites        Site[]
+  embeds       Embed[]
+  sheets       Sheet[]
+
+  @@unique([tenantId, name])
+  @@index([tenantId, createdAt])
+}
+
+model Workflow {
+  id          String         @id @default(cuid())
+  tenantId    String
+  tenant      Tenant         @relation(fields: [tenantId], references: [id])
+  projectId   String
+  project     Project        @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  name        String
+  description String?
+  status      WorkflowStatus @default(DRAFT)
+  // Optimistic concurrency for canvas autosave: a save carrying a stale
+  // expectedVersion is refused rather than silently overwriting an edit.
+  version     Int            @default(1)
+  // The graph is stored as one document because the canvas loads and saves it
+  // as one document, and node positions are presentation noise. The two
+  // questions that DO need querying are answered by WorkflowDependency.
+  definition  Json           @default("{\"nodes\":[],\"edges\":[]}")
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  dependencies WorkflowDependency[]
+
+  @@unique([projectId, name])
+  @@index([tenantId, status])
+  @@index([projectId, status])
+}
+
+/// Derived index over Workflow.definition, rebuilt transactionally on every
+/// save. Answers "which workflows reference this agent?" (to block deleting an
+/// agent that a live graph depends on) and "which active graph already claims
+/// this inbound channel?" (two is ambiguous routing).
+model WorkflowDependency {
+  id         String                 @id @default(cuid())
+  tenantId   String
+  tenant     Tenant                 @relation(fields: [tenantId], references: [id])
+  workflowId String
+  workflow   Workflow               @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  kind       WorkflowDependencyKind
+  // FK-LESS on purpose, exactly like UsageEvent.agentId: deleting an agent must
+  // not orphan or silently rewrite a graph. The node keeps pointing at a gone
+  // row, validation reports it as dangling, activation is refused, and run
+  // history can still name the node.
+  refId      String
+
+  @@unique([workflowId, kind, refId])
+  @@index([tenantId, kind, refId])
+  @@index([refId])
+}
+
+model WorkflowRun {
+  id                String    @id @default(cuid())
+  tenantId          String
+  tenant            Tenant    @relation(fields: [tenantId], references: [id])
+  // FK-less plus a name snapshot: run history is the audit trail and must
+  // outlive both a rename and a delete of the workflow that produced it.
+  workflowId        String
+  workflowName      String?
+  workflowVersion   Int
+  status            RunStatus @default(RUNNING)
+  triggerSource     String // "console-test" | "telegram" | ...
+  externalMessageId String?
+  input             String
+  output            String?
+  error             String?
+  // Display cache only — UsageEvent stays the billing truth.
+  tokensUsed        Int       @default(0)
+  durationMs        Int?
+  startedAt         DateTime  @default(now())
+  finishedAt        DateTime?
+
+  nodeRuns WorkflowNodeRun[]
+
+  @@index([tenantId, startedAt])
+  @@index([workflowId, startedAt])
+}
+
+model WorkflowNodeRun {
+  id         String           @id @default(cuid())
+  tenantId   String
+  tenant     Tenant           @relation(fields: [tenantId], references: [id])
+  runId      String
+  run        WorkflowRun      @relation(fields: [runId], references: [id], onDelete: Cascade)
+  nodeKey    String // matches definition.nodes[].key
+  kind       WorkflowNodeKind
+  label      String?
+  refId      String? // the agentId / integrationId actually used at that moment
+  status     NodeRunStatus    @default(PENDING)
+  attempt    Int              @default(1)
+  input      String?
+  output     String?
+  error      String?
+  // What this node's model turns actually cost, from the provider's own usage.
+  // An orchestrator turn is several calls; this is the sum the run adds up.
+  tokensUsed Int              @default(0)
+  // Per-call audit for a tool-using node: one entry per executed tool call
+  // ({ index, tool, argsPreview, resultPreview, ok, inputTokens, outputTokens }).
+  // Tool rounds are ephemeral, so this column is the only per-call record.
+  trace      Json?
+  durationMs Int?
+  startedAt  DateTime         @default(now())
+  finishedAt DateTime?
+
+  // Load-bearing, not cosmetic. The worker pre-writes one PENDING row per node
+  // so the canvas can honestly show "3 of 7 nodes not reached", and on a
+  // re-claimed lease a node already SUCCEEDED is skipped rather than re-run —
+  // the difference between at-least-once delivery and at-least-once BILLING.
+  // It is also why the graph must be a DAG: a cycle would need a node to run
+  // more than once in a single run.
+  @@unique([runId, nodeKey])
+  @@index([tenantId, status])
+}
+
+/**
+ * One agent turn, persisted so the console can show what an agent did after the
+ * fact and while it runs. Workflow node runs remain the audit record for graph
+ * turns; these rows cover direct/playground turns, which previously left only
+ * a usage event and a reply row behind.
+ * The ledger stays the billing truth: `tokensUsed` here is a display cache, and
+ * activity writes are best-effort so they can never un-bill a provider round.
+ */
+model AgentRun {
+  id             String    @id @default(cuid())
+  tenantId       String
+  tenant         Tenant    @relation(fields: [tenantId], references: [id])
+  // FK-less plus a name snapshot, for the same reason workflow runs carry one:
+  // history must outlive a rename or delete.
+  projectId      String
+  agentId        String
+  agentName      String
+  triggerSource  String // "playground" | "console" | ...
+  status         RunStatus @default(RUNNING)
+  conversationId String?
+  externalChatId String?
+  input          String
+  output         String?
+  error          String?
+  tokensUsed     Int       @default(0)
+  stepCount      Int       @default(0) // model rounds, including the final one
+  toolCallCount  Int       @default(0)
+  // The `TurnAssembly` this turn actually ran with: catalogue, granted tool keys,
+  // retrieval scope and every degradation. Written once at start so a run can be
+  // replayed against the capability set it had, not the one the agent has now.
+  capability     Json?
+  capabilityHash String?
+  durationMs     Int?
+  deadlineAt     DateTime?
+  startedAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  finishedAt     DateTime?
+
+  steps AgentRunStep[]
+
+  @@index([tenantId, startedAt])
+  @@index([tenantId, status, startedAt])
+  @@index([agentId, startedAt])
+}
+
+/**
+ * The run's ordered step stream: one MODEL row per completed round and one TOOL
+ * row per executed call. `seq` is assigned by the writer and is unique per run,
+ * so the detail view can render a stable timeline without a second sort key.
+ */
+model AgentRunStep {
+  id            String           @id @default(cuid())
+  runId         String
+  run           AgentRun         @relation(fields: [runId], references: [id], onDelete: Cascade)
+  seq           Int
+  round         Int
+  kind          AgentRunStepKind
+  tool          String?
+  argsPreview   String?
+  resultPreview String?
+  ok            Boolean?
+  inputTokens   Int              @default(0)
+  outputTokens  Int              @default(0)
+  durationMs    Int              @default(0)
+  createdAt     DateTime         @default(now())
+
+  @@unique([runId, seq])
+  @@index([runId, seq])
+}
+
+/**
+ * Which worker processes are alive, and when they last said so.
+ * Infrastructure, not tenant data: no `tenantId`, so decisions D2 and D3 do not
+ * apply and nothing in the console reads it as a resource. Its only job is to
+ * make the activation question answerable truthfully — "this graph will run" is
+ * a claim about a *second* process, and the API has no business making it from
+ * its own state.
+ */
+model WorkerHeartbeat {
+  id         String   @id @default(cuid())
+  workerId   String   @unique
+  lane       String
+  startedAt  DateTime @default(now())
+  // Plain column, not @updatedAt: the beat is a heartbeat, and the worker writes
+  // the moment it means. Letting Prisma restamp it on every touch would make
+  // "alive 4 seconds ago" indistinguishable from "alive 40 minutes ago".
+  lastSeenAt DateTime @default(now())
+}
+
+/**
+ * One widget on one website.
+ * The key in the pasted snippet is a public identifier — it sits in the page's
+ * HTML — so it is not a secret and is not treated as one. What actually gates a
+ * request is the row this key resolves to plus its origin allowlist and its rate
+ * bucket; deleting or rotating the key moves the gate, not the secrecy. Only the
+ * key's sha-256 is stored: the lookup needs the hash, the console needs nothing
+ * but a hint, and a leaked database yields no working widget.
+ * `tenantId`, `projectId` and `agentId` are resolved here, server-side, on every
+ * request. Nothing in a public request body can name a tenant.
+ */
+model Embed {
+  id        String      @id @default(cuid())
+  tenantId  String
+  tenant    Tenant      @relation(fields: [tenantId], references: [id])
+  projectId String
+  project   Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  agentId   String
+  agent     Agent       @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  name      String      @default("Website widget")
+  /// sha-256 of the public key. The key itself is returned once, at creation.
+  keyHash   String      @unique
+  /// `emb_ab12…` — enough to recognise a row in the console, useless as a key.
+  keyHint   String
+  /// Canonical origins (`https://acme.example`). An empty list denies everyone,
+  /// which is the safe direction for a row created by a body that forgot one.
+  origins   String[]
+  status    EmbedStatus @default(ACTIVE)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  rates    EmbedRate[]
+  messages EmbedMessage[]
+  feedback EmbedFeedback[]
+
+  @@index([tenantId, agentId])
+}
+
+/**
+ * A token bucket per widget and per hashed visitor IP, in Postgres rather than
+ * Redis (decision D7): the queue already lives here, and a rate limit that needs
+ * another daemon is a rate limit that silently stops working.
+ * `rejected` is a counter, not a log: a 429 increments it without consuming a
+ * token or moving `updatedAt` the way a refill would, so the number the console
+ * shows is the number of refusals this bucket actually produced.
+ */
+model EmbedRate {
+  embedId   String
+  embed     Embed    @relation(fields: [embedId], references: [id], onDelete: Cascade)
+  ipHash    String
+  tokens    Float    @default(0)
+  rejected  Int      @default(0)
+  updatedAt DateTime @updatedAt
+
+  @@id([embedId, ipHash])
+}
+
+/**
+ * One visitor question and the turn that answered it.
+ * The row is created by the API before the job is queued, so the visitor has an
+ * id to poll and a crash between the two leaves a visible FAILED row rather than
+ * a message that vanished. `sessionId` is the visitor's own browser token — no
+ * cookie, no server-side session — and it is what makes a thread continuous.
+ */
+model EmbedMessage {
+  id         String             @id @default(cuid())
+  tenantId   String
+  tenant     Tenant             @relation(fields: [tenantId], references: [id])
+  embedId    String
+  embed      Embed              @relation(fields: [embedId], references: [id], onDelete: Cascade)
+  sessionId  String
+  question   String
+  answer     String?
+  status     EmbedMessageStatus @default(PENDING)
+  error      String?
+  agentRunId String?
+  actions    Json               @default("[]")
+  citations  Json               @default("[]")
+  createdAt  DateTime           @default(now())
+  answeredAt DateTime?
+
+  @@index([embedId, sessionId, createdAt])
+  @@index([tenantId, createdAt])
+}
+
+/**
+ * How a visitor felt, as judged by a model rather than by punctuation.
+ *
+ * One row per public message (`messageId` is unique): a re-delivered job is a
+ * no-op, never a second opinion that overwrites the first. `source` says where the
+ * label came from — `model`, `unparseable` (the model answered, but not in the
+ * shape we asked for), `provider_failed`, or `balance_exhausted` — so a row that
+ * says UNKNOWN is auditable rather than mysterious. `score` is the model's own
+ * confidence and is null when it gave none that could be trusted; nothing here is
+ * derived from a lexicon.
+ */
+model EmbedFeedback {
+  id         String    @id @default(cuid())
+  tenantId   String
+  tenant     Tenant    @relation(fields: [tenantId], references: [id])
+  embedId    String
+  embed      Embed     @relation(fields: [embedId], references: [id], onDelete: Cascade)
+  messageId  String    @unique
+  question   String
+  answer     String?
+  sentiment  Sentiment @default(UNKNOWN)
+  score      Float?
+  source     String
+  model      String?
+  error      String?
+  tokensUsed Int       @default(0)
+  createdAt  DateTime  @default(now())
+
+  @@index([embedId, createdAt])
+  @@index([tenantId, createdAt])
+  @@index([tenantId, sentiment])
+}
+
+enum Sentiment {
+  POSITIVE
+  NEUTRAL
+  NEGATIVE
+  UNKNOWN
+}
+
+/**
+ * The website an agent answers for. `rootUrl` is where a crawl starts and `host`
+ * is the only host a *Go to page* button may point at — stored rather than derived
+ * on every read so the routing check cannot be talked out of its scope by a page
+ * whose links moved.
+ * `manualUrls` are pages the operator named explicitly: they are crawled even when
+ * no link on the root reaches them, which is the difference between "a crawl" and
+ * "a sitemap that happens to be linked".
+ * Tenant- and project-scoped like every other resource; `agentId` is unique because
+ * one agent routing visitors into two sites would make `find_page` ambiguous.
+ */
+model Site {
+  id         String     @id @default(cuid())
+  tenantId   String
+  tenant     Tenant     @relation(fields: [tenantId], references: [id])
+  projectId  String
+  project    Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  agentId    String     @unique
+  agent      Agent      @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  rootUrl    String
+  host       String
+  manualUrls String[]   @default([])
+  status     SiteStatus @default(PENDING)
+  /// Why the last crawl failed. Kept until the next crawl starts, never cleared by a read.
+  error      String?
+  /// Written from the rows the crawler actually inserted.
+  pageCount  Int        @default(0)
+  crawledAt  DateTime?
+  createdAt  DateTime   @default(now())
+  updatedAt  DateTime   @updatedAt
+
+  pages SitePage[]
+
+  @@index([tenantId, status])
+}
+
+/**
+ * One crawled page. This table is the *entire* set of URLs an agent may offer as a
+ * button: `find_page` answers from it and nothing else, so a URL the crawler never
+ * saw cannot leave the API as an action even if the model asks for it.
+ * `summary` and `intent` are extracted deterministically (meta description / first
+ * paragraph and the h1) rather than generated by a model: routing must not cost a
+ * token or change between two turns over the same page.
+ */
+model SitePage {
+  id      String @id @default(cuid())
+  tenantId String
+  siteId  String
+  site    Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  url     String
+  path    String
+  title   String @default("")
+  summary String @default("")
+  intent  String @default("")
+
+  @@unique([siteId, url])
+  @@index([tenantId, siteId])
+}
+
+/**
+ * A table an agent produced. `columns` stores the header once and each `SheetRow`
+ * stores its cells positionally, so the console renders exactly what the tool
+ * accepted — there is no second serialization to drift. `rowCount` is written from
+ * the rows actually inserted in the same transaction, so "the model claimed N and
+ * N were stored" is a fact about the database rather than about the model's reply.
+ * The write path refuses an oversized table instead of truncating it: a sheet that
+ * silently dropped rows would be a lie with a number on it.
+ */
+model Sheet {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  agentId   String
+  agent     Agent    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  title     String
+  columns   Json
+  rowCount  Int      @default(0)
+  createdAt DateTime @default(now())
+
+  /// The last successful push to Google Sheets. The in-app rows remain the source
+  /// of truth: a push copies them and never edits or deletes them.
+  exportedAt            DateTime?
+  externalSpreadsheetId String?
+  externalSheetName     String?
+  externalUrl           String?
+  /// Why the last push failed, kept until a push succeeds. A failed push leaves
+  /// `exportedAt` untouched, so "it says it failed" and "it was never sent" are
+  /// different states rather than the same blank.
+  exportError           String?
+
+  rows SheetRow[]
+
+  @@index([projectId, createdAt])
+  @@index([tenantId, createdAt])
+}
+
+/// One row of a sheet, in column order. No `tenantId`: a child table reachable
+/// only through its sheet, exactly like `AgentRunStep` under its run.
+model SheetRow {
+  id       String @id @default(cuid())
+  sheetId  String
+  sheet    Sheet  @relation(fields: [sheetId], references: [id], onDelete: Cascade)
+  rowIndex Int
+  cells    Json
+
+  @@unique([sheetId, rowIndex])
+}

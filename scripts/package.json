@@ -1,0 +1,9 @@
+{
+  "name": "@saas/scripts",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@saas/providers": "workspace:*",
+    "@saas/shared": "workspace:*"
+  }
+}

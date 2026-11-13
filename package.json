@@ -1,0 +1,24 @@
+{
+  "name": "ai-agent-saas",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev:api": "tsx apps/api/src/main.ts",
+    "dev:web": "pnpm --filter @saas/web dev",
+    "dev:worker": "tsx apps/worker/src/main.ts",
+    "typecheck": "tsc --noEmit && tsc -p apps/web --noEmit",
+    "test": "vitest run",
+    "db:generate": "prisma generate --schema packages/db/prisma/schema.prisma",
+    "db:migrate": "prisma migrate dev --schema packages/db/prisma/schema.prisma",
+    "db:deploy": "prisma migrate deploy --schema packages/db/prisma/schema.prisma",
+    "db:seed": "tsx packages/db/src/seed.ts",
+    "activity": "tsx scripts/demo-activity.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "prisma": "^6.10.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^3.2.0"
+  }
+}

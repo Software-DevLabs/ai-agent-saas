@@ -1,0 +1,321 @@
+@font-face {
+  font-family: "Mona Sans";
+  src: url("./assets/fonts/MonaSans-VariableFont_wdth-wght.ttf") format("truetype-variations");
+  font-weight: 200 900;
+  font-stretch: 75% 125%;
+  font-display: swap;
+}
+
+/*
+  Mastra Studio token system (Mastra playground-ui lineage, via the reference
+  dashboard). Achromatic oklch ramps; colour is reserved for meaning. Fill and
+  border tiers are alpha rungs of one tint so every surface composes on any
+  background. Dark is the default theme (`.dark` on <html>), light is `:root`.
+*/
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ---------- achromatic ramps (light) ---------- */
+:root {
+  --background-1: 0.9642 0 0; /* sidebar / canvas base */
+  --background-2: 0.9851 0 0; /* app background */
+  --background-3: 1 0 0; /* card */
+  --gray-1: 0.9431 0 0;
+  --gray-2: 0.9189 0 0;
+  --gray-3: 0.8945 0 0;
+  --gray-4: 0.8452 0 0;
+  --gray-5: 0.7604 0 0;
+  --gray-6: 0.6201 0 0;
+  --gray-7: 0.5486 0 0;
+  --gray-8: 0.4459 0 0;
+  --gray-9: 0.3092 0 0;
+  --gray-10: 0.1286 0 0;
+
+  /* semantic aliases */
+  --background: var(--background-2);
+  --foreground: var(--gray-10);
+  --card: var(--background-3);
+  --card-foreground: var(--gray-10);
+  --popover: var(--background-3);
+  --popover-foreground: var(--gray-10);
+  --primary: var(--gray-10);
+  --primary-foreground: var(--background-2);
+  --secondary: var(--gray-2);
+  --secondary-foreground: var(--gray-10);
+  --muted: var(--gray-1);
+  --muted-foreground: var(--gray-8);
+  --accent: var(--gray-2);
+  --accent-foreground: var(--gray-10);
+  --destructive: 0.55 0.21 24;
+  --destructive-foreground: 0.9851 0 0;
+  --success: 0.55 0.17 150;
+  --success-foreground: 0.9851 0 0;
+  --warning: 0.6 0.17 80;
+  --warning-foreground: 0.9851 0 0;
+  --info: 0.55 0.21 260;
+  --info-foreground: 0.9851 0 0;
+  --ring: 0.205 0 0;
+
+  --border: 0.205 0 0;
+  --border-alpha: 0.09;
+  --sidebar-background: var(--background-1);
+  --sidebar-foreground: var(--gray-10);
+  --sidebar-accent: var(--gray-2);
+  --sidebar-accent-foreground: var(--gray-10);
+
+  /* fill / border rungs (alpha of one tint) */
+  --fill-tint: 20.5%;
+  --fill-subtle: oklch(var(--fill-tint) 0 0 / 4%);
+  --fill: oklch(var(--fill-tint) 0 0 / 6%);
+  --fill-hover: oklch(var(--fill-tint) 0 0 / 9%);
+  --fill-active: oklch(var(--fill-tint) 0 0 / 12%);
+  --fill-strong: oklch(var(--fill-tint) 0 0 / 18%);
+  --fill-inverse: oklch(var(--foreground));
+  --fill-inverse-hover: color-mix(in srgb, oklch(var(--foreground)) 75%, oklch(var(--background)));
+  --fill-inverse-active: color-mix(in srgb, oklch(var(--foreground)) 60%, oklch(var(--background)));
+  --fill-inverse-disabled: color-mix(in srgb, oklch(var(--foreground)) 30%, oklch(var(--background)));
+  --fill-inverse-foreground: oklch(var(--background));
+
+  --border-strong: oklch(var(--fill-tint) 0 0 / 19%);
+  --border-hover: oklch(var(--fill-tint) 0 0 / 25%);
+  --border-focus: oklch(var(--fill-tint) 0 0 / 50%);
+  --surface-panel: 0.9442 0 0;
+  --scrim: oklch(20.8% 0 0 / 45%);
+
+  /* rims + elevation */
+  --surface-rim: oklch(0% 0 0 / 8%);
+  --field-rim: var(--surface-rim);
+  --field-rim-focus: var(--border-focus);
+  --field-on-surface: var(--background-3);
+  --field-rim-on-surface: oklch(0% 0 0 / 14%);
+  --elevation-lip: 0 0 #0000;
+  --inset-highlight: oklch(100% 0 0 / 55%);
+  --inset-rim: oklch(0% 0 0 / 8%);
+  --elevation-raised: 0 1px 2px -1px oklch(0% 0 0 / 5%), 0 1px 3px -2px oklch(0% 0 0 / 4%);
+  --elevation-overlay: 0 2px 4px -1px oklch(0% 0 0 / 8%), 0 4px 8px -2px oklch(0% 0 0 / 6%),
+    0 8px 16px -4px oklch(0% 0 0 / 6%);
+
+  --field: var(--background-3);
+  --field-disabled: var(--gray-1);
+}
+
+/* ---------- achromatic ramps (dark, default) ---------- */
+.dark {
+  --background-1: 0.1382 0 0;
+  --background-2: 0.1591 0 0;
+  --background-3: 0.1913 0 0;
+  --gray-1: 0.2178 0 0;
+  --gray-2: 0.2435 0 0;
+  --gray-3: 0.2686 0 0;
+  --gray-4: 0.3092 0 0;
+  --gray-5: 0.3715 0 0;
+  --gray-6: 0.4495 0 0;
+  --gray-7: 0.5208 0 0;
+  --gray-8: 0.65 0 0;
+  --gray-9: 0.7699 0 0;
+  --gray-10: 0.9851 0 0;
+
+  --primary: var(--gray-10);
+  --primary-foreground: 0.1286 0 0;
+  --secondary: var(--gray-2);
+  --secondary-foreground: var(--gray-10);
+  --muted: var(--gray-1);
+  --muted-foreground: var(--gray-8);
+  --accent: var(--gray-2);
+  --accent-foreground: var(--gray-10);
+  --destructive: 0.63 0.22 24;
+  --destructive-foreground: 0.06 0 0;
+  --success: 0.72 0.15 150;
+  --success-foreground: 0.1286 0 0;
+  --warning: 0.78 0.15 80;
+  --warning-foreground: 0.1286 0 0;
+  --info: 0.62 0.205 260;
+  --info-foreground: 0.1286 0 0;
+  --ring: var(--gray-9);
+
+  --border: 1 0 0;
+  --border-alpha: 0.09;
+  --sidebar-background: var(--background-1);
+  --sidebar-foreground: var(--gray-10);
+  --sidebar-accent: var(--gray-1);
+  --sidebar-accent-foreground: var(--gray-10);
+
+  --fill-tint: 100%;
+  --fill-subtle: oklch(var(--fill-tint) 0 0 / 4%);
+  --fill: oklch(var(--fill-tint) 0 0 / 6%);
+  --fill-hover: oklch(var(--fill-tint) 0 0 / 9%);
+  --fill-active: oklch(var(--fill-tint) 0 0 / 12%);
+  --fill-strong: oklch(var(--fill-tint) 0 0 / 18%);
+  --fill-inverse: oklch(var(--foreground));
+  --fill-inverse-foreground: oklch(var(--background));
+
+  --border-strong: oklch(var(--fill-tint) 0 0 / 19%);
+  --border-hover: oklch(var(--fill-tint) 0 0 / 25%);
+  --border-focus: oklch(var(--fill-tint) 0 0 / 40%);
+  --surface-panel: 0.2244 0 0;
+  --scrim: oklch(0% 0 0 / 75%);
+
+  --surface-rim: oklch(100% 0 0 / 5%);
+  --field-rim: var(--surface-rim);
+  --field-on-surface: var(--gray-1);
+  --field-rim-on-surface: oklch(100% 0 0 / 5%);
+  --elevation-lip: inset 0 1px 0 oklch(100% 0 0 / 3%);
+  --inset-highlight: oklch(100% 0 0 / 7%);
+  --inset-rim: oklch(100% 0 0 / 7%);
+  --elevation-raised: 0 1px 2px -1px oklch(0% 0 0 / 22%), 0 2px 3px -2px oklch(0% 0 0 / 14%);
+  --elevation-overlay: 0 2px 2px oklch(0% 0 0 / 10%), 0 4px 4px oklch(0% 0 0 / 10%),
+    0 8px 8px oklch(0% 0 0 / 10%);
+
+  --field: var(--background-3);
+  --field-disabled: var(--background-1);
+}
+
+@layer base {
+  /* One variable pair for every hairline: the tint at its alpha rung. */
+  * {
+    border-color: oklch(var(--border) / var(--border-alpha));
+  }
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    font-feature-settings: "ss06" on;
+  }
+  body {
+    @apply bg-background text-foreground font-sans text-sm antialiased;
+  }
+  ::selection {
+    background: var(--fill-strong);
+  }
+  /* Numbers line up in tables and stat blocks without per-cell plumbing. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    border-radius: 9999px;
+    border: 3px solid transparent;
+    background-clip: padding-box;
+    background-color: var(--border-strong);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: var(--border-focus);
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  :focus-visible {
+    outline: 1px solid var(--border-focus);
+    outline-offset: 1px;
+  }
+  input[type="range"] {
+    @apply h-1 w-full cursor-pointer appearance-none rounded-full bg-muted;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    @apply h-3.5 w-3.5 appearance-none rounded-full bg-primary;
+  }
+  /* appearance-none kills the native arrow, so draw a neutral one back. */
+  select {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238a8a8a' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+  }
+}
+
+@keyframes shimmer {
+  100% {
+    transform: translateX(200%);
+  }
+}
+
+@keyframes activity-dot {
+  0%,
+  100% {
+    opacity: 0.25;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes activity-ring {
+  0% {
+    box-shadow: 0 0 0 0 oklch(var(--foreground) / 0.22);
+  }
+  70% {
+    box-shadow: 0 0 0 5px oklch(var(--foreground) / 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 oklch(var(--foreground) / 0);
+  }
+}
+
+/*
+  React Flow. Kept OUT of any @layer on purpose: an unlayered rule outranks a
+  layered one whatever the import order, and xyflow's own stylesheet is
+  unlayered. Every override is expressed through a token that flips with `.dark`,
+  so the library never decides the canvas palette from the OS preference.
+*/
+:root {
+  --xy-background-color: oklch(var(--background));
+  --xy-background-pattern-color: oklch(var(--foreground) / 0.12);
+
+  --xy-edge-stroke: oklch(var(--foreground) / 0.28);
+  --xy-edge-stroke-width: 1.5;
+  --xy-edge-stroke-selected: oklch(var(--foreground) / 0.75);
+  --xy-connectionline-stroke: oklch(var(--foreground) / 0.45);
+
+  --xy-node-color: oklch(var(--card-foreground));
+  --xy-node-background-color: oklch(var(--card));
+  --xy-node-border: 1px solid var(--border-strong);
+  --xy-node-border-radius: 10px;
+  --xy-node-boxshadow-hover: 0 1px 2px 0 oklch(0% 0 0 / 0.06);
+  --xy-node-boxshadow-selected: 0 0 0 2px var(--border-focus);
+
+  --xy-handle-background-color: oklch(var(--muted-foreground));
+  --xy-handle-border-color: oklch(var(--background));
+
+  --xy-selection-background-color: oklch(var(--foreground) / 0.06);
+  --xy-selection-border: 1px dashed oklch(var(--foreground) / 0.35);
+
+  --xy-controls-button-background-color: oklch(var(--card));
+  --xy-controls-button-background-color-hover: oklch(var(--accent));
+  --xy-controls-button-color: oklch(var(--muted-foreground));
+  --xy-controls-button-color-hover: oklch(var(--foreground));
+  --xy-controls-button-border-color: var(--border-strong);
+  --xy-controls-box-shadow: var(--elevation-raised);
+
+  --xy-minimap-background-color: oklch(var(--card));
+  --xy-minimap-mask-background-color: oklch(var(--foreground) / 0.08);
+  --xy-minimap-node-background-color: oklch(var(--muted-foreground) / 0.45);
+  --xy-minimap-node-stroke-color: transparent;
+
+  --xy-edge-label-background-color: oklch(var(--card));
+  --xy-edge-label-color: oklch(var(--muted-foreground));
+  --xy-attribution-background-color: oklch(var(--card) / 0.85);
+}
+
+@layer base {
+  .react-flow__node:focus-visible {
+    outline: 2px solid var(--border-focus);
+    outline-offset: 2px;
+    box-shadow: none;
+  }
+
+  /* Attribution stays on screen: it is the library's licence request, not chrome. */
+  .react-flow__attribution {
+    border-radius: 6px;
+    color: oklch(var(--muted-foreground));
+  }
+}

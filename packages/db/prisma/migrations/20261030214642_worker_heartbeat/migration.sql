@@ -1,0 +1,13 @@
+-- CreateTable
+CREATE TABLE "WorkerHeartbeat" (
+    "id" TEXT NOT NULL,
+    "workerId" TEXT NOT NULL,
+    "lane" TEXT NOT NULL,
+    "startedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "lastSeenAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "WorkerHeartbeat_pkey" PRIMARY KEY ("id")
+);
+
+-- CreateIndex
+CREATE UNIQUE INDEX "WorkerHeartbeat_workerId_key" ON "WorkerHeartbeat"("workerId");

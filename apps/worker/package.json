@@ -1,0 +1,12 @@
+{
+  "name": "@saas/worker",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@saas/db": "workspace:*",
+    "@saas/providers": "workspace:*",
+    "@saas/shared": "workspace:*",
+    "@saas/core": "workspace:*",
+    "@prisma/client": "^6.19.3"
+  }
+}
